@@ -1,0 +1,14 @@
+# Voice-Enabled Hospital Assistant Robot Dependencies
+
+# Speech Recognition
+SpeechRecognition==3.10.0
+pyaudio==0.2.13
+
+# Text-to-Speech
+pyttsx3==2.90
+
+# Natural Language Processing
+nltk==3.8.1
+
+# Utilities
+python-dateutil==2.8.2
