@@ -48,12 +48,23 @@ class ResponseGenerator:
     
     def _generate_doctor_response(self, entities, text):
         """Generate response for doctor-related queries."""
-        # Check for specific specialization
+        # Check for specific specialization in the original text
         specialization = None
-        for entity in entities:
-            if entity['type'] == 'specialization':
-                specialization = entity['value']
+        text_lower = text.lower()
+        
+        # Check common specializations directly in text
+        specializations_to_check = ['orthopedic', 'cardiology', 'neurology', 'pediatric', 'radiology']
+        for spec in specializations_to_check:
+            if spec in text_lower:
+                specialization = spec.replace('ic', 'ics') if spec.endswith('ic') else spec
                 break
+        
+        # Also check from entities
+        if not specialization:
+            for entity in entities:
+                if entity['type'] == 'specialization':
+                    specialization = entity['value']
+                    break
         
         if specialization:
             doctors = get_doctors_info(specialization)

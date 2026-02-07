@@ -47,6 +47,19 @@ class NLPProcessor:
         Returns:
             str: Detected intent
         """
+        # Check for specific patterns first (higher priority)
+        
+        # Emergency indicators
+        if any(word in text for word in ['emergency', 'urgent', 'chest pain', 'heart attack', 'stroke', 'ambulance', 'critical']):
+            return 'emergency'
+        
+        # Information/need indicators combined with specific topics
+        if 'information' in text or 'need' in text or 'tell' in text or 'about' in text:
+            if any(word in text for word in ['pharmacy', 'lab', 'laboratory', 'cafeteria', 'imaging', 'service']):
+                return 'service'
+            if any(word in text for word in ['doctor', 'physician', 'specialist']):
+                return 'doctor'
+        
         # Count matches for each intent
         intent_scores = {}
         for intent, keywords in self.intent_keywords.items():
