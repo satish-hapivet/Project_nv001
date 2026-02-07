@@ -56,7 +56,11 @@ class ResponseGenerator:
         specializations_to_check = ['orthopedic', 'cardiology', 'neurology', 'pediatric', 'radiology']
         for spec in specializations_to_check:
             if spec in text_lower:
-                specialization = spec.replace('ic', 'ics') if spec.endswith('ic') else spec
+                # Add 's' to words ending in 'ic' to make them plural if needed
+                if spec.endswith('ic') and not spec.endswith('ics'):
+                    specialization = spec + 's'
+                else:
+                    specialization = spec
                 break
         
         # Also check from entities
