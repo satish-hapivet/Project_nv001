@@ -52,7 +52,8 @@ class ResponseGenerator:
         specialization = None
         text_lower = text.lower()
         
-        # Check common specializations directly in text
+        # Check common specialization terms in text (using singular forms that patients typically say)
+        # The get_doctors_info function handles partial matching, so 'orthopedic' matches 'orthopedics'
         specializations_to_check = ['orthopedic', 'cardiology', 'neurology', 'pediatric', 'radiology']
         for spec in specializations_to_check:
             if spec in text_lower:
