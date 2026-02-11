@@ -1,0 +1,27 @@
+# ================================
+# NIMS Hospital Voice Assistant
+# Clean Architecture Dependencies
+# ================================
+
+# Core Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+
+# Database
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.0
+
+# AI & LLM
+openai>=1.40.0
+langdetect>=1.0.9
+gTTS>=2.4.0
+
+# Utilities
+aiofiles>=23.2.0
+httpx>=0.25.0
+
+# WebSocket
+websockets>=12.0
+aiohttp>=3.9.0
