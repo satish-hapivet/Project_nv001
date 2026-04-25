@@ -1,2 +1,2 @@
-# Clinic Assistant Chatbot - Enterprise Edition
+# NIMS Hospital Voice Assistant
 __version__ = "1.0.0"

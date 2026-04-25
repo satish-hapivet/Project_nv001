@@ -27,10 +27,15 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 env/
 ENV/
 env.bak/
 venv.bak/
+
+# uv artifacts
+.python-version
+uv.lock
 
 # IDE
 .vscode/

@@ -11,17 +11,18 @@ python-dotenv>=1.0.0
 
 # Database
 asyncpg>=0.29.0
-psycopg2-binary>=2.9.0
 
 # AI & LLM
 openai>=1.40.0
-langdetect>=1.0.9
 gTTS>=2.4.0
-
-# Utilities
-aiofiles>=23.2.0
 httpx>=0.25.0
+
+# STT (Speech-to-Text)
+faster-whisper>=1.0.0
+numpy>=1.24.0
+
+# TTS (Text-to-Speech)
+edge-tts>=6.1.0
 
 # WebSocket
 websockets>=12.0
-aiohttp>=3.9.0

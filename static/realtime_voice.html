@@ -431,9 +431,10 @@
 <body>
     <header class="header">
         <h1>NIMS Hospital Voice Assistant</h1>
-        <p>Ask about departments, facilities, and hospital information</p>
+        <p>Ask about departments, doctors, facilities, and hospital information</p>
         <div class="lang-badges">
-            <span class="lang-badge active" data-lang="en">English</span>
+            <span class="lang-badge active" data-lang="auto">Auto Detect</span>
+            <span class="lang-badge" data-lang="en">English</span>
             <span class="lang-badge" data-lang="hi">हिंदी</span>
             <span class="lang-badge" data-lang="te">తెలుగు</span>
         </div>
@@ -492,6 +493,7 @@
             <button class="quick-btn" data-query="Emergency ward location">Emergency</button>
             <button class="quick-btn" data-query="Visiting hours">Visiting Hours</button>
             <button class="quick-btn" data-query="Parking information">Parking</button>
+            <button class="quick-btn" data-query="List available doctors">Doctor</button>
         </div>
         
         <!-- Voice Control -->
@@ -514,8 +516,9 @@
     <script>
         // ============ Configuration ============
         const API_BASE = window.location.origin;
-        const SILENCE_TIMEOUT = 2000;
+        const WS_URL = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws/voice';
         const MAX_RECORDING = 30000;
+        const TARGET_SAMPLE_RATE = 16000;
         
         // ============ State ============
         const State = {
@@ -527,12 +530,17 @@
         };
         
         let currentState = State.IDLE;
-        let currentLanguage = 'en';
-        let mediaRecorder = null;
-        let audioChunks = [];
-        let speechRecognition = null;
-        let silenceTimer = null;
+        let detectedLanguage = 'auto';  // Auto-detect, no manual selection needed
         let currentAudio = null;
+        let ws = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let scriptProcessor = null;
+        let audioChunks = [];
+        let maxRecordTimer = null;
+        let isRecording = false;
+        let speechRecognition = null;
+        let browserTranscript = '';
         
         // ============ DOM Elements ============
         const micButton = document.getElementById('micButton');
@@ -549,39 +557,30 @@
         // ============ State Management ============
         function setState(newState, message = null) {
             currentState = newState;
-            
-            // Update button
             micButton.className = 'mic-button ' + newState;
-            
-            // Update status indicator
             statusIndicator.className = 'status-indicator ' + newState;
             
             const states = {
-                [State.IDLE]: { text: 'Ready', icon: '🎤', hint: 'Click to start speaking', showWave: false, showTranscript: false },
-                [State.LISTENING]: { text: 'Listening...', icon: '⏹️', hint: 'Speak now — auto-stops on pause', showWave: true, showTranscript: true },
-                [State.TRANSCRIBING]: { text: 'Transcribing...', icon: '⏳', hint: 'Processing speech...', showWave: false, showTranscript: true },
-                [State.PROCESSING]: { text: 'Processing...', icon: '⏳', hint: 'Getting response...', showWave: false, showTranscript: true },
-                [State.SPEAKING]: { text: 'Speaking', icon: '🔊', hint: 'Click to interrupt', showWave: false, showTranscript: false }
+                [State.IDLE]:         { text: 'Ready',           icon: '🎤', hint: 'Click to start speaking',    showWave: false, showTranscript: false },
+                [State.LISTENING]:    { text: 'Listening...',    icon: '⏹️', hint: 'Speak now — click to stop', showWave: true,  showTranscript: true  },
+                [State.TRANSCRIBING]: { text: 'Transcribing...', icon: '⏳', hint: 'Processing speech...',       showWave: false, showTranscript: true  },
+                [State.PROCESSING]:   { text: 'Processing...',  icon: '⏳', hint: 'Getting response...',         showWave: false, showTranscript: true  },
+                [State.SPEAKING]:     { text: 'Speaking',        icon: '🔊', hint: 'Click to interrupt',         showWave: false, showTranscript: false }
             };
             
             const config = states[newState];
             statusText.textContent = message || config.text;
             micButton.textContent = config.icon;
             controlHint.textContent = config.hint;
-            
-            // Toggle UI elements
             waveform.classList.toggle('active', config.showWave);
             transcriptionPanel.classList.toggle('active', config.showTranscript);
-            
-            // Button state
-            micButton.disabled = (newState === State.PROCESSING);
+            micButton.disabled = (newState === State.PROCESSING || newState === State.TRANSCRIBING);
         }
         
         // ============ Transcription Display ============
         function updateTranscription(text, isFinal = false) {
             const interimSpan = transcriptionText.querySelector('.interim');
             const finalSpan = transcriptionText.querySelector('.final');
-            
             if (isFinal) {
                 finalSpan.textContent = text;
                 interimSpan.textContent = '';
@@ -593,20 +592,21 @@
         function clearTranscription() {
             transcriptionText.querySelector('.interim').textContent = '';
             transcriptionText.querySelector('.final').textContent = '';
+            browserTranscript = '';
         }
         
-        // ============ Speech Recognition (Browser API) ============
+        // ============ Browser Speech Recognition (for real-time display only) ============
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
-                console.warn('Speech recognition not supported');
+                console.warn('Browser speech recognition not available for live preview');
                 return null;
             }
             
             const recognition = new SpeechRecognition();
             recognition.continuous = true;
             recognition.interimResults = true;
-            recognition.lang = getRecognitionLanguage();
+            recognition.lang = 'en-US';  // Start with English, just for display preview
             
             recognition.onresult = (event) => {
                 let interimTranscript = '';
@@ -621,116 +621,257 @@
                     }
                 }
                 
-                // Display real-time transcription
                 if (finalTranscript) {
-                    updateTranscription(finalTranscript, true);
-                    // Reset silence timer
-                    resetSilenceTimer(finalTranscript);
+                    browserTranscript = finalTranscript;
+                    updateTranscription(finalTranscript, false);  // Show as interim until server confirms
                 } else if (interimTranscript) {
                     updateTranscription(interimTranscript, false);
-                    resetSilenceTimer();
                 }
             };
             
             recognition.onerror = (event) => {
-                console.error('Speech recognition error:', event.error);
-                if (event.error !== 'aborted') {
-                    setState(State.IDLE);
-                }
+                console.log('Browser speech recognition error (non-fatal):', event.error);
             };
             
             recognition.onend = () => {
+                // Auto-restart while still listening
                 if (currentState === State.LISTENING) {
-                    // Auto-restart if still in listening mode
-                    try {
-                        recognition.start();
-                    } catch (e) {
-                        console.log('Recognition ended');
-                    }
+                    try { recognition.start(); } catch (e) {}
                 }
             };
             
             return recognition;
         }
         
-        function getRecognitionLanguage() {
-            const langMap = {
-                'en': 'en-US',
-                'hi': 'hi-IN',
-                'te': 'te-IN'
+        // ============ WebSocket Connection ============
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+            
+            ws = new WebSocket(WS_URL);
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
             };
-            return langMap[currentLanguage] || 'en-US';
+            
+            ws.onmessage = (event) => {
+                if (event.data instanceof ArrayBuffer) {
+                    playAudioBlob(event.data);
+                    return;
+                }
+                
+                try {
+                    const data = JSON.parse(event.data);
+                    handleWSMessage(data);
+                } catch (e) {
+                    console.error('WS parse error:', e);
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket closed, reconnecting in 2s...');
+                ws = null;
+                setTimeout(connectWebSocket, 2000);
+            };
+            
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
         }
         
-        function resetSilenceTimer(finalText = null) {
-            clearTimeout(silenceTimer);
-            
-            if (finalText) {
-                // After final result, wait for silence then process
-                silenceTimer = setTimeout(() => {
-                    if (currentState === State.LISTENING) {
-                        stopListening(finalText);
+        function handleWSMessage(data) {
+            switch (data.type) {
+                case 'connected':
+                    console.log('Session:', data.session_id, 'STT available:', data.stt_available);
+                    if (!data.stt_available) {
+                        addSystemMessage('Voice recognition initializing... Text input available.');
                     }
-                }, SILENCE_TIMEOUT);
+                    break;
+                    
+                case 'stt_result':
+                    // Server-side STT transcription arrived — show what user said
+                    updateTranscription(data.text, true);
+                    if (data.text && data.text.trim()) {
+                        addMessage(data.text, 'user');
+                        // Update detected language badge
+                        if (data.language) {
+                            updateLanguageBadge(data.language);
+                        }
+                    }
+                    setState(State.PROCESSING, 'Getting response...');
+                    break;
+                    
+                case 'response':
+                    addMessage(data.text, 'bot', data.audio_url);
+                    if (data.language) {
+                        updateLanguageBadge(data.language);
+                    }
+                    // Audio will follow as binary, or use audio_url
+                    if (!data.audio_url) {
+                        setState(State.IDLE);
+                    }
+                    // If audio_url exists but no binary follows, play via URL
+                    if (data.audio_url) {
+                        // Wait briefly for binary frame; if none arrives, play URL
+                        setTimeout(() => {
+                            if (currentState !== State.SPEAKING) {
+                                playAudio(data.audio_url);
+                            }
+                        }, 300);
+                    }
+                    break;
+                    
+                case 'error':
+                    addSystemMessage(data.text || 'An error occurred');
+                    setState(State.IDLE);
+                    break;
             }
+        }
+        
+        // ============ Language Badge (auto-updated) ============
+        function updateLanguageBadge(lang) {
+            document.querySelectorAll('.lang-badge').forEach(b => b.classList.remove('active'));
+            const badge = document.querySelector(`.lang-badge[data-lang="${lang}"]`);
+            if (badge) badge.classList.add('active');
+            detectedLanguage = lang;
+        }
+        
+        // ============ Audio Recording (PCM int16, 16kHz mono) ============
+        async function startRecording() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: { ideal: TARGET_SAMPLE_RATE },
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: TARGET_SAMPLE_RATE
+                });
+                
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+                audioChunks = [];
+                isRecording = true;
+                
+                scriptProcessor.onaudioprocess = (e) => {
+                    if (!isRecording) return;
+                    const float32 = e.inputBuffer.getChannelData(0);
+                    const int16 = new Int16Array(float32.length);
+                    for (let i = 0; i < float32.length; i++) {
+                        const s = Math.max(-1, Math.min(1, float32[i]));
+                        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    audioChunks.push(int16);
+                };
+                
+                source.connect(scriptProcessor);
+                scriptProcessor.connect(audioContext.destination);
+                
+                maxRecordTimer = setTimeout(() => {
+                    if (isRecording) stopRecordingAndSend();
+                }, MAX_RECORDING);
+                
+            } catch (error) {
+                console.error('Microphone access error:', error);
+                addSystemMessage('Could not access microphone. Please check permissions.');
+                setState(State.IDLE);
+                throw error;
+            }
+        }
+        
+        function stopRecording() {
+            isRecording = false;
+            clearTimeout(maxRecordTimer);
+            
+            if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor = null; }
+            if (audioContext) { audioContext.close(); audioContext = null; }
+            if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+            
+            const totalLength = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+            const merged = new Int16Array(totalLength);
+            let offset = 0;
+            for (const chunk of audioChunks) {
+                merged.set(chunk, offset);
+                offset += chunk.length;
+            }
+            audioChunks = [];
+            return merged.buffer;
         }
         
         // ============ Recording Controls ============
         async function startListening() {
+            clearTranscription();
+            setState(State.LISTENING);
+            
+            const emptyState = conversation.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+            
+            // Ensure WebSocket is connected
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                connectWebSocket();
+                await new Promise(resolve => setTimeout(resolve, 800));
+            }
+            
+            // Start browser speech recognition for real-time preview
+            if (!speechRecognition) {
+                speechRecognition = initSpeechRecognition();
+            }
+            if (speechRecognition) {
+                try { speechRecognition.start(); } catch (e) {}
+            }
+            
             try {
-                clearTranscription();
-                setState(State.LISTENING);
-                
-                // Clear any existing empty state
-                const emptyState = conversation.querySelector('.empty-state');
-                if (emptyState) emptyState.remove();
-                
-                // Start speech recognition
-                if (!speechRecognition) {
-                    speechRecognition = initSpeechRecognition();
-                }
-                
-                if (speechRecognition) {
-                    speechRecognition.lang = getRecognitionLanguage();
-                    speechRecognition.start();
-                }
-                
+                await startRecording();
+                updateTranscription('Listening...', false);
             } catch (error) {
-                console.error('Start listening error:', error);
                 setState(State.IDLE);
-                addSystemMessage('Could not access microphone. Please check permissions.');
             }
         }
         
-        async function stopListening(transcribedText = null) {
-            // Stop speech recognition
+        async function stopRecordingAndSend() {
+            if (!isRecording && currentState !== State.LISTENING) return;
+            
+            // Stop browser speech recognition
             if (speechRecognition) {
-                try {
-                    speechRecognition.stop();
-                } catch (e) {}
+                try { speechRecognition.stop(); } catch (e) {}
             }
             
-            clearTimeout(silenceTimer);
+            setState(State.TRANSCRIBING, 'Transcribing...');
             
-            // Get final transcription
-            const finalText = transcribedText || transcriptionText.querySelector('.final').textContent;
+            const pcmBuffer = stopRecording();
             
-            if (finalText.trim()) {
-                setState(State.PROCESSING);
-                
-                // Add user message
-                addMessage(finalText, 'user');
-                
-                // Process with API
-                await processQuery(finalText);
+            if (!pcmBuffer || pcmBuffer.byteLength < 3200) {  // Less than ~0.1s at 16kHz
+                addSystemMessage('No speech detected. Please try again.');
+                setState(State.IDLE);
+                return;
+            }
+            
+            // Show browser transcript as interim while server processes
+            if (browserTranscript) {
+                updateTranscription(browserTranscript + ' (verifying...)', false);
             } else {
+                updateTranscription('Processing your speech...', false);
+            }
+            
+            setState(State.PROCESSING, 'Transcribing & processing...');
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(pcmBuffer);
+            } else {
+                addSystemMessage('Connection lost. Reconnecting...');
+                connectWebSocket();
                 setState(State.IDLE);
             }
         }
         
         function toggleListening() {
             if (currentState === State.LISTENING) {
-                stopListening();
+                stopRecordingAndSend();
             } else if (currentState === State.IDLE || currentState === State.SPEAKING) {
                 if (currentAudio) {
                     currentAudio.pause();
@@ -740,37 +881,30 @@
             }
         }
         
-        // ============ API Communication ============
+        // ============ Text API Communication ============
         async function processQuery(text) {
             try {
-                const response = await fetch(`${API_BASE}/api/chat`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        message: text,
-                        language: currentLanguage,
-                        session_id: getSessionId()
-                    })
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`API error: ${response.status}`);
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ message: text }));
+                    return;
                 }
                 
-                const data = await response.json();
+                const response = await fetch(`${API_BASE}/api/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text })
+                });
                 
-                // Add bot response
+                if (!response.ok) throw new Error(`API error: ${response.status}`);
+                
+                const data = await response.json();
                 addMessage(data.response || data.text, 'bot', data.audio_url);
                 
-                // Play audio if available
                 if (data.audio_url) {
                     playAudio(data.audio_url);
                 } else {
                     setState(State.IDLE);
                 }
-                
             } catch (error) {
                 console.error('API error:', error);
                 addMessage('Sorry, I encountered an error. Please try again.', 'bot');
@@ -780,18 +914,14 @@
         
         // ============ Message Display ============
         function addMessage(text, sender, audioUrl = null) {
+            if (!text || !text.trim()) return;
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${sender}`;
-            
             const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             
             let audioHtml = '';
             if (audioUrl) {
-                audioHtml = `
-                    <div class="audio-player">
-                        <audio controls src="${audioUrl}"></audio>
-                    </div>
-                `;
+                audioHtml = `<div class="audio-player"><audio controls src="${escapeAttr(audioUrl)}"></audio></div>`;
             }
             
             messageDiv.innerHTML = `
@@ -820,17 +950,32 @@
             return div.innerHTML;
         }
         
+        function escapeAttr(str) {
+            return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        }
+        
         // ============ Audio Playback ============
         function playAudio(url) {
             setState(State.SPEAKING);
-            
+            currentAudio = new Audio(url);
+            currentAudio.onended = () => { currentAudio = null; setState(State.IDLE); };
+            currentAudio.onerror = () => { currentAudio = null; setState(State.IDLE); };
+            currentAudio.play().catch(() => setState(State.IDLE));
+        }
+        
+        function playAudioBlob(arrayBuffer) {
+            setState(State.SPEAKING);
+            const blob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+            const url = URL.createObjectURL(blob);
             currentAudio = new Audio(url);
             currentAudio.onended = () => {
                 currentAudio = null;
+                URL.revokeObjectURL(url);
                 setState(State.IDLE);
             };
             currentAudio.onerror = () => {
                 currentAudio = null;
+                URL.revokeObjectURL(url);
                 setState(State.IDLE);
             };
             currentAudio.play().catch(() => setState(State.IDLE));
@@ -847,17 +992,13 @@
         }
         
         // ============ Event Listeners ============
-        
-        // Mic button
         micButton.addEventListener('click', toggleListening);
         
-        // Text input
         sendBtn.addEventListener('click', () => {
             const text = textInput.value.trim();
             if (text) {
                 const emptyState = conversation.querySelector('.empty-state');
                 if (emptyState) emptyState.remove();
-                
                 addMessage(text, 'user');
                 textInput.value = '';
                 setState(State.PROCESSING);
@@ -866,28 +1007,24 @@
         });
         
         textInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendBtn.click();
-            }
+            if (e.key === 'Enter') sendBtn.click();
         });
         
-        // Language selection
+        // Language badges now just display detected language (clicking still works for manual override)
         document.querySelectorAll('.lang-badge').forEach(badge => {
             badge.addEventListener('click', () => {
                 document.querySelectorAll('.lang-badge').forEach(b => b.classList.remove('active'));
                 badge.classList.add('active');
-                currentLanguage = badge.dataset.lang;
+                detectedLanguage = badge.dataset.lang;
             });
         });
         
-        // Quick actions
         document.querySelectorAll('.quick-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const query = btn.dataset.query;
                 if (query) {
                     const emptyState = conversation.querySelector('.empty-state');
                     if (emptyState) emptyState.remove();
-                    
                     addMessage(query, 'user');
                     setState(State.PROCESSING);
                     processQuery(query);
@@ -898,8 +1035,8 @@
         // ============ Initialize ============
         document.addEventListener('DOMContentLoaded', () => {
             setState(State.IDLE);
+            connectWebSocket();
             
-            // Check API health
             fetch(`${API_BASE}/health`)
                 .then(r => r.json())
                 .then(data => {

@@ -31,8 +31,8 @@ class PostgresConfig:
     """PostgreSQL Database Configuration"""
     host: str = field(default_factory=lambda: os.getenv('POSTGRES_HOST', 'localhost'))
     port: int = field(default_factory=lambda: int(os.getenv('POSTGRES_PORT', '5432')))
-    database: str = field(default_factory=lambda: os.getenv('POSTGRES_DATABASE', 'clinic_assistant'))
-    user: str = field(default_factory=lambda: os.getenv('POSTGRES_USER', 'clinic_user'))
+    database: str = field(default_factory=lambda: os.getenv('POSTGRES_DATABASE', 'nims_hospital_db'))
+    user: str = field(default_factory=lambda: os.getenv('POSTGRES_USER', 'postgres'))
     password: str = field(default_factory=lambda: os.getenv('POSTGRES_PASSWORD', ''))
     ssl_mode: str = field(default_factory=lambda: os.getenv('POSTGRES_SSL_MODE', 'prefer'))
     min_connections: int = 5
@@ -71,7 +71,7 @@ class ServerConfig:
     port: int = field(default_factory=lambda: int(os.getenv('SERVER_PORT', '8001')))
     debug: bool = field(default_factory=lambda: os.getenv('DEBUG_MODE', 'false').lower() == 'true')
     log_level: str = field(default_factory=lambda: os.getenv('LOG_LEVEL', 'INFO'))
-    allowed_origins: list = field(default_factory=lambda: os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000').split(','))
+    allowed_origins: list = field(default_factory=lambda: os.getenv('ALLOWED_ORIGINS', '*').split(','))
 
 
 @dataclass
@@ -79,6 +79,7 @@ class LanguageConfig:
     """Language Configuration"""
     default_language: str = field(default_factory=lambda: os.getenv('DEFAULT_LANGUAGE', 'en'))
     supported_languages: list = field(default_factory=lambda: ['en', 'hi', 'te'])
+    speaker_name: str = field(default_factory=lambda: os.getenv('SPEAKER_NAME', 'NIMS Assistant'))
     
     LANGUAGE_NAMES = {
         'en': 'English',
@@ -94,6 +95,24 @@ class LanguageConfig:
 
 
 @dataclass
+class STTConfig:
+    """Speech-to-Text Configuration (faster-whisper)"""
+    model_size: str = field(default_factory=lambda: os.getenv('WHISPER_MODEL', 'medium'))
+    device: str = field(default_factory=lambda: os.getenv('WHISPER_DEVICE', 'cpu'))
+    compute_type: str = 'int8'
+    beam_size: int = 5
+    sample_rate: int = 16000
+
+
+@dataclass
+class TTSConfig:
+    """Text-to-Speech Configuration (edge-tts)"""
+    voice_en: str = field(default_factory=lambda: os.getenv('TTS_VOICE_EN', 'en-IN-NeerjaNeural'))
+    voice_hi: str = field(default_factory=lambda: os.getenv('TTS_VOICE_HI', 'hi-IN-NeerjaNeural'))
+    voice_te: str = field(default_factory=lambda: os.getenv('TTS_VOICE_TE', 'te-IN-ShrutiNeural'))
+
+
+@dataclass
 class AppConfig:
     """Main Application Configuration"""
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
@@ -101,6 +120,8 @@ class AppConfig:
     redis: RedisConfig = field(default_factory=RedisConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     language: LanguageConfig = field(default_factory=LanguageConfig)
+    stt: STTConfig = field(default_factory=STTConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
     
     def validate_all(self, strict: bool = False) -> bool:
         """Validate all configurations"""
